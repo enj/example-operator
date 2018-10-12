@@ -118,8 +118,8 @@ func (c ExampleOperator) sync() error {
 				Name:      secretName,
 				Namespace: targetNamespaceName,
 			},
-			StringData: map[string]string{
-				"data": secretData,
+			Data: map[string][]byte{
+				secretData: []byte("007"),
 			},
 		})
 		errs = append(errs, err)
