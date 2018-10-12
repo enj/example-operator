@@ -2,118 +2,104 @@ package operator
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/blang/semver"
 	"github.com/golang/glog"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/informers"
-	appsclientv1 "k8s.io/client-go/kubernetes/typed/apps/v1"
+	"k8s.io/client-go/informers/core/v1"
 	coreclientv1 "k8s.io/client-go/kubernetes/typed/core/v1"
-	rbacclientv1 "k8s.io/client-go/kubernetes/typed/rbac/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
 	operatorsv1alpha1 "github.com/openshift/api/operator/v1alpha1"
-	scsclientv1alpha1 "github.com/openshift/client-go/servicecertsigner/clientset/versioned/typed/servicecertsigner/v1alpha1"
-	scsinformerv1alpha1 "github.com/openshift/client-go/servicecertsigner/informers/externalversions/servicecertsigner/v1alpha1"
-	"github.com/openshift/library-go/pkg/operator/v1alpha1helpers"
+	"github.com/openshift/library-go/pkg/operator/resource/resourceapply"
 	"github.com/openshift/library-go/pkg/operator/versioning"
 )
 
 const (
-	targetNamespaceName = "openshift-service-ca"
+	targetNamespaceName = "example-operator"
 	workQueueKey        = "key"
 )
 
-type ServiceCertSignerOperator struct {
-	operatorConfigClient scsclientv1alpha1.ServiceCertSignerOperatorConfigsGetter
+type ExampleOperator struct {
+	secret    coreclientv1.SecretsGetter
+	configMap coreclientv1.ConfigMapsGetter
 
-	appsv1Client appsclientv1.AppsV1Interface
-	corev1Client coreclientv1.CoreV1Interface
-	rbacv1Client rbacclientv1.RbacV1Interface
+	// allows for unit testing
+	syncHandler func() error
 
 	// queue only ever has one item, but it has nice error handling backoff/retry semantics
 	queue workqueue.RateLimitingInterface
 }
 
-func NewServiceCertSignerOperator(
-	serviceCertSignerConfigInformer scsinformerv1alpha1.ServiceCertSignerOperatorConfigInformer,
-	namespacedKubeInformers informers.SharedInformerFactory,
-	operatorConfigClient scsclientv1alpha1.ServiceCertSignerOperatorConfigsGetter,
-	appsv1Client appsclientv1.AppsV1Interface,
-	corev1Client coreclientv1.CoreV1Interface,
-	rbacv1Client rbacclientv1.RbacV1Interface,
-) *ServiceCertSignerOperator {
-	c := &ServiceCertSignerOperator{
-		operatorConfigClient: operatorConfigClient,
-		appsv1Client:         appsv1Client,
-		corev1Client:         corev1Client,
-		rbacv1Client:         rbacv1Client,
+func NewExampleOperator(
+	informers v1.Interface,
+	secret coreclientv1.SecretsGetter,
+	configMap coreclientv1.ConfigMapsGetter,
+) *ExampleOperator {
+	c := &ExampleOperator{
+		secret:    secret,
+		configMap: configMap,
 
-		queue: workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "ServiceCertSignerOperator"),
+		queue: workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "ExampleOperator"),
 	}
 
-	serviceCertSignerConfigInformer.Informer().AddEventHandler(c.eventHandler())
-	namespacedKubeInformers.Core().V1().ConfigMaps().Informer().AddEventHandler(c.eventHandler())
-	namespacedKubeInformers.Core().V1().ServiceAccounts().Informer().AddEventHandler(c.eventHandler())
-	namespacedKubeInformers.Core().V1().Services().Informer().AddEventHandler(c.eventHandler())
-	namespacedKubeInformers.Apps().V1().Deployments().Informer().AddEventHandler(c.eventHandler())
+	c.syncHandler = c.sync
 
-	// we only watch some namespaces
-	namespacedKubeInformers.Core().V1().Namespaces().Informer().AddEventHandler(c.namespaceEventHandler())
+	informers.Secrets().Informer().AddEventHandler(c.eventHandler())
+	informers.ConfigMaps().Informer().AddEventHandler(c.eventHandler())
 
 	return c
 }
 
-func (c ServiceCertSignerOperator) sync() error {
-	operatorConfig, err := c.operatorConfigClient.ServiceCertSignerOperatorConfigs().Get("instance", metav1.GetOptions{})
+func (c ExampleOperator) sync() error {
+	config, err := c.configMap.ConfigMaps(targetNamespaceName).Get("instance", metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
-	switch operatorConfig.Spec.ManagementState {
+
+	// these are my pretend spec/status fields
+	d := config.Data
+
+	secretName := d["name"]
+
+	state := operatorsv1alpha1.ManagementState(d["state"])
+
+	switch state {
+	case operatorsv1alpha1.Managed:
+		// handled below
+
 	case operatorsv1alpha1.Unmanaged:
 		return nil
 
 	case operatorsv1alpha1.Removed:
-		// TODO probably need to watch until the NS is really gone
-		if err := c.corev1Client.Namespaces().Delete(targetNamespaceName, nil); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
-		operatorConfig.Status.TaskSummary = "Remove"
-		operatorConfig.Status.TargetAvailability = nil
-		operatorConfig.Status.CurrentAvailability = nil
-		operatorConfig.Status.Conditions = []operatorsv1alpha1.OperatorCondition{
-			{
-				Type:   operatorsv1alpha1.OperatorStatusTypeAvailable,
-				Status: operatorsv1alpha1.ConditionFalse,
-			},
-		}
-		if _, err := c.operatorConfigClient.ServiceCertSignerOperatorConfigs().Update(operatorConfig); err != nil {
-			return err
-		}
-		return nil
+		return c.secret.Secrets(targetNamespaceName).Delete(secretName, nil)
+
+	default:
+		// TODO should update status
+		return fmt.Errorf("unknown state: %v", state)
 	}
+
+	startVersion := d["current_version"]
+	endVersion := d["desired_version"]
 
 	var currentActualVerion *semver.Version
 
-	if operatorConfig.Status.CurrentAvailability != nil {
-		ver, err := semver.Parse(operatorConfig.Status.CurrentAvailability.Version)
+	if len(startVersion) != 0 {
+		ver, err := semver.Parse(startVersion)
 		if err != nil {
 			utilruntime.HandleError(err)
 		} else {
 			currentActualVerion = &ver
 		}
 	}
-	desiredVersion, err := semver.Parse(operatorConfig.Spec.Version)
+	desiredVersion, err := semver.Parse(endVersion)
 	if err != nil {
 		// TODO report failing status, we may actually attempt to do this in the "normal" error handling
 		return err
@@ -121,91 +107,66 @@ func (c ServiceCertSignerOperator) sync() error {
 
 	v310_00_to_unknown := versioning.NewRangeOrDie("3.10.0", "3.10.1")
 
-	errors := []error{}
+	outConfig := config.DeepCopy()
+	var errs []error
+
 	switch {
 	case v310_00_to_unknown.BetweenOrEmpty(currentActualVerion) && v310_00_to_unknown.Between(&desiredVersion):
-		var versionAvailability operatorsv1alpha1.VersionAvailablity
-		operatorConfig.Status.TaskSummary = "sync-[3.10.0,3.10.1)"
-		operatorConfig.Status.TargetAvailability = nil
-		versionAvailability, errors = sync_v311_00_to_latest(c, operatorConfig, operatorConfig.Status.CurrentAvailability)
-		operatorConfig.Status.CurrentAvailability = &versionAvailability
+		secretData := d["data"]
+		_, _, err := resourceapply.ApplySecret(c.secret, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: targetNamespaceName,
+			},
+			StringData: map[string]string{
+				"data": secretData,
+			},
+		})
+		errs = append(errs, err)
+
+		if err == nil { // this needs work
+			outConfig.Data["summary"] = "sync-[3.10.0,3.10.1)"
+			outConfig.Data["current_version"] = desiredVersion.String()
+		}
 
 	default:
-		operatorConfig.Status.TaskSummary = "unrecognized"
-		if _, err := c.operatorConfigClient.ServiceCertSignerOperatorConfigs().UpdateStatus(operatorConfig); err != nil {
-			utilruntime.HandleError(err)
-		}
-
-		return fmt.Errorf("unrecognized state")
+		outConfig.Data["summary"] = "unrecognized"
 	}
 
-	// given the VersionAvailability and the status.Version, we can compute availability
-	availableCondition := operatorsv1alpha1.OperatorCondition{
-		Type:   operatorsv1alpha1.OperatorStatusTypeAvailable,
-		Status: operatorsv1alpha1.ConditionUnknown,
-	}
-	if operatorConfig.Status.CurrentAvailability != nil && operatorConfig.Status.CurrentAvailability.ReadyReplicas > 0 {
-		availableCondition.Status = operatorsv1alpha1.ConditionTrue
-	} else {
-		availableCondition.Status = operatorsv1alpha1.ConditionFalse
-	}
-	v1alpha1helpers.SetOperatorCondition(&operatorConfig.Status.Conditions, availableCondition)
+	_, _, err = resourceapply.ApplyConfigMap(c.configMap, outConfig)
+	errs = append(errs, err)
 
-	syncSuccessfulCondition := operatorsv1alpha1.OperatorCondition{
-		Type:   operatorsv1alpha1.OperatorStatusTypeSyncSuccessful,
-		Status: operatorsv1alpha1.ConditionTrue,
-	}
-	if operatorConfig.Status.CurrentAvailability != nil && len(operatorConfig.Status.CurrentAvailability.Errors) > 0 {
-		syncSuccessfulCondition.Status = operatorsv1alpha1.ConditionFalse
-		syncSuccessfulCondition.Message = strings.Join(operatorConfig.Status.CurrentAvailability.Errors, "\n")
-	}
-	if operatorConfig.Status.TargetAvailability != nil && len(operatorConfig.Status.TargetAvailability.Errors) > 0 {
-		syncSuccessfulCondition.Status = operatorsv1alpha1.ConditionFalse
-		if len(syncSuccessfulCondition.Message) == 0 {
-			syncSuccessfulCondition.Message = strings.Join(operatorConfig.Status.TargetAvailability.Errors, "\n")
-		} else {
-			syncSuccessfulCondition.Message = availableCondition.Message + "\n" + strings.Join(operatorConfig.Status.TargetAvailability.Errors, "\n")
-		}
-	}
-	v1alpha1helpers.SetOperatorCondition(&operatorConfig.Status.Conditions, syncSuccessfulCondition)
-	if syncSuccessfulCondition.Status == operatorsv1alpha1.ConditionTrue {
-		operatorConfig.Status.ObservedGeneration = operatorConfig.ObjectMeta.Generation
-	}
-
-	if _, err := c.operatorConfigClient.ServiceCertSignerOperatorConfigs().UpdateStatus(operatorConfig); err != nil {
-		errors = append(errors, err)
-	}
-
-	return utilerrors.NewAggregate(errors)
+	return utilerrors.NewAggregate(errs)
 }
 
 // Run starts the serviceCertSigner and blocks until stopCh is closed.
-func (c *ServiceCertSignerOperator) Run(workers int, stopCh <-chan struct{}) {
+func (c *ExampleOperator) Run(workers int, stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
-	glog.Infof("Starting ServiceCertSignerOperator")
-	defer glog.Infof("Shutting down ServiceCertSignerOperator")
+	glog.Infof("Starting ExampleOperator")
+	defer glog.Infof("Shutting down ExampleOperator")
 
-	// doesn't matter what workers say, only start one.
-	go wait.Until(c.runWorker, time.Second, stopCh)
+	for i := 0; i < workers; i++ {
+		go wait.Until(c.runWorker, time.Second, stopCh)
+	}
 
 	<-stopCh
 }
 
-func (c *ServiceCertSignerOperator) runWorker() {
+func (c *ExampleOperator) runWorker() {
 	for c.processNextWorkItem() {
 	}
 }
 
-func (c *ServiceCertSignerOperator) processNextWorkItem() bool {
+func (c *ExampleOperator) processNextWorkItem() bool {
 	dsKey, quit := c.queue.Get()
 	if quit {
 		return false
 	}
 	defer c.queue.Done(dsKey)
 
-	err := c.sync()
+	err := c.syncHandler()
 	if err == nil {
 		c.queue.Forget(dsKey)
 		return true
@@ -218,54 +179,11 @@ func (c *ServiceCertSignerOperator) processNextWorkItem() bool {
 }
 
 // eventHandler queues the operator to check spec and status
-func (c *ServiceCertSignerOperator) eventHandler() cache.ResourceEventHandler {
+// TODO add filtering
+func (c *ExampleOperator) eventHandler() cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.queue.Add(workQueueKey) },
 		UpdateFunc: func(old, new interface{}) { c.queue.Add(workQueueKey) },
 		DeleteFunc: func(obj interface{}) { c.queue.Add(workQueueKey) },
-	}
-}
-
-// this set of namespaces will include things like logging and metrics which are used to drive
-var interestingNamespaces = sets.NewString(targetNamespaceName)
-
-func (c *ServiceCertSignerOperator) namespaceEventHandler() cache.ResourceEventHandler {
-	return cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			ns, ok := obj.(*corev1.Namespace)
-			if !ok {
-				c.queue.Add(workQueueKey)
-			}
-			if ns.Name == targetNamespaceName {
-				c.queue.Add(workQueueKey)
-			}
-		},
-		UpdateFunc: func(old, new interface{}) {
-			ns, ok := old.(*corev1.Namespace)
-			if !ok {
-				c.queue.Add(workQueueKey)
-			}
-			if ns.Name == targetNamespaceName {
-				c.queue.Add(workQueueKey)
-			}
-		},
-		DeleteFunc: func(obj interface{}) {
-			ns, ok := obj.(*corev1.Namespace)
-			if !ok {
-				tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
-				if !ok {
-					utilruntime.HandleError(fmt.Errorf("Couldn't get object from tombstone %#v", obj))
-					return
-				}
-				ns, ok = tombstone.Obj.(*corev1.Namespace)
-				if !ok {
-					utilruntime.HandleError(fmt.Errorf("Tombstone contained object that is not a Namespace %#v", obj))
-					return
-				}
-			}
-			if ns.Name == targetNamespaceName {
-				c.queue.Add(workQueueKey)
-			}
-		},
 	}
 }
