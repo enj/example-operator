@@ -23,15 +23,9 @@ import (
 
 const (
 	TargetNamespace = "example-operator"
-	workQueueKey    = "key"
+
+	workQueueKey = "key"
 )
-
-type ExampleOperator struct {
-	secretsClient    coreclientv1.SecretsGetter
-	configMapsClient coreclientv1.ConfigMapsGetter
-
-	*controller.Controller
-}
 
 func NewExampleOperator(coreInformers v1.Interface, secretsClient coreclientv1.SecretsGetter, configMapsClient coreclientv1.ConfigMapsGetter) *ExampleOperator {
 	c := &ExampleOperator{
@@ -63,7 +57,14 @@ func eventHandler(queue workqueue.RateLimitingInterface) cache.ResourceEventHand
 	}
 }
 
-func (c ExampleOperator) sync() error {
+type ExampleOperator struct {
+	secretsClient    coreclientv1.SecretsGetter
+	configMapsClient coreclientv1.ConfigMapsGetter
+
+	*controller.Controller
+}
+
+func (c *ExampleOperator) sync() error {
 	config, err := c.configMapsClient.ConfigMaps(TargetNamespace).Get("instance", metav1.GetOptions{})
 	if err != nil {
 		return err
