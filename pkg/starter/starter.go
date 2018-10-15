@@ -19,7 +19,7 @@ func RunOperator(clientConfig *rest.Config, stopCh <-chan struct{}) error {
 
 	kubeInformersNamespaced := informers.NewSharedInformerFactoryWithOptions(kubeClient, 10*time.Minute, informers.WithNamespace(operator.TargetNamespace))
 
-	operator := operator.NewExampleOperator(
+	exampleOperator := operator.NewExampleOperator(
 		kubeInformersNamespaced.Core().V1(),
 		kubeClient.CoreV1(),
 		kubeClient.CoreV1(),
@@ -27,7 +27,7 @@ func RunOperator(clientConfig *rest.Config, stopCh <-chan struct{}) error {
 
 	kubeInformersNamespaced.Start(stopCh)
 
-	operator.Run(1, stopCh) // only start one worker because we only have one key name in our queue
+	exampleOperator.Run(1, stopCh) // only start one worker because we only have one key name in our queue
 
 	return fmt.Errorf("stopped")
 }

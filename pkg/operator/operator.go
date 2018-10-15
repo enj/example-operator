@@ -27,34 +27,35 @@ const (
 )
 
 type ExampleOperator struct {
-	secret    coreclientv1.SecretsGetter
-	configMap coreclientv1.ConfigMapsGetter
+	secretsClient    coreclientv1.SecretsGetter
+	configMapsClient coreclientv1.ConfigMapsGetter
 
 	*controller.Controller
 }
 
-func NewExampleOperator(informers v1.Interface, secret coreclientv1.SecretsGetter, configMap coreclientv1.ConfigMapsGetter) *ExampleOperator {
+func NewExampleOperator(coreInformers v1.Interface, secretsClient coreclientv1.SecretsGetter, configMapsClient coreclientv1.ConfigMapsGetter) *ExampleOperator {
 	c := &ExampleOperator{
-		secret:    secret,
-		configMap: configMap,
+		secretsClient:    secretsClient,
+		configMapsClient: configMapsClient,
 	}
 
-	secretsInformer := informers.Secrets().Informer()
-	configMapsInformer := informers.ConfigMaps().Informer()
+	// TODO move this logic up one level
+	secretsInformer := coreInformers.Secrets().Informer()
+	configMapsInformer := coreInformers.ConfigMaps().Informer()
 
-	controller, queue := controller.New("ExampleOperator", c.sync, secretsInformer.HasSynced, configMapsInformer.HasSynced)
+	embeddedController, queue := controller.New("ExampleOperator", c.sync, secretsInformer.HasSynced, configMapsInformer.HasSynced)
 
-	c.Controller = controller
+	c.Controller = embeddedController
 
-	secretsInformer.AddEventHandler(c.eventHandler(queue))
-	configMapsInformer.AddEventHandler(c.eventHandler(queue))
+	secretsInformer.AddEventHandler(eventHandler(queue))
+	configMapsInformer.AddEventHandler(eventHandler(queue))
 
 	return c
 }
 
 // eventHandler queues the operator to check spec and status
-// TODO add filtering
-func (c *ExampleOperator) eventHandler(queue workqueue.RateLimitingInterface) cache.ResourceEventHandler {
+// TODO add filtering and more nuanced logic
+func eventHandler(queue workqueue.RateLimitingInterface) cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { queue.Add(workQueueKey) },
 		UpdateFunc: func(old, new interface{}) { queue.Add(workQueueKey) },
@@ -63,7 +64,7 @@ func (c *ExampleOperator) eventHandler(queue workqueue.RateLimitingInterface) ca
 }
 
 func (c ExampleOperator) sync() error {
-	config, err := c.configMap.ConfigMaps(TargetNamespace).Get("instance", metav1.GetOptions{})
+	config, err := c.configMapsClient.ConfigMaps(TargetNamespace).Get("instance", metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -83,7 +84,7 @@ func (c ExampleOperator) sync() error {
 		return nil
 
 	case operatorsv1alpha1.Removed:
-		return c.secret.Secrets(TargetNamespace).Delete(secretName, nil)
+		return c.secretsClient.Secrets(TargetNamespace).Delete(secretName, nil)
 
 	default:
 		// TODO should update status
@@ -117,7 +118,7 @@ func (c ExampleOperator) sync() error {
 	switch {
 	case v310_00_to_unknown.BetweenOrEmpty(currentActualVerion) && v310_00_to_unknown.Between(&desiredVersion):
 		secretData := d["data"]
-		_, _, err := resourceapply.ApplySecret(c.secret, &corev1.Secret{
+		_, _, err := resourceapply.ApplySecret(c.secretsClient, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      secretName,
 				Namespace: TargetNamespace,
@@ -137,7 +138,7 @@ func (c ExampleOperator) sync() error {
 		outConfig.Data["summary"] = "unrecognized"
 	}
 
-	_, _, err = resourceapply.ApplyConfigMap(c.configMap, outConfig)
+	_, _, err = resourceapply.ApplyConfigMap(c.configMapsClient, outConfig)
 	errs = append(errs, err)
 
 	return utilerrors.NewAggregate(errs)
