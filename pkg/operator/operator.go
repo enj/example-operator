@@ -2,16 +2,13 @@ package operator
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/blang/semver"
-	"github.com/golang/glog"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers/core/v1"
 	coreclientv1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
@@ -20,46 +17,53 @@ import (
 	operatorsv1alpha1 "github.com/openshift/api/operator/v1alpha1"
 	"github.com/openshift/library-go/pkg/operator/resource/resourceapply"
 	"github.com/openshift/library-go/pkg/operator/versioning"
+
+	"github.com/enj/example-operator/pkg/controller"
 )
 
 const (
-	targetNamespaceName = "example-operator"
-	workQueueKey        = "key"
+	TargetNamespace = "example-operator"
+	workQueueKey    = "key"
 )
 
 type ExampleOperator struct {
 	secret    coreclientv1.SecretsGetter
 	configMap coreclientv1.ConfigMapsGetter
 
-	// allows for unit testing
-	syncHandler func() error
-
-	// queue only ever has one item, but it has nice error handling backoff/retry semantics
-	queue workqueue.RateLimitingInterface
+	*controller.Controller
 }
 
-func NewExampleOperator(
-	informers v1.Interface,
-	secret coreclientv1.SecretsGetter,
-	configMap coreclientv1.ConfigMapsGetter,
-) *ExampleOperator {
+func NewExampleOperator(informers v1.Interface, secret coreclientv1.SecretsGetter, configMap coreclientv1.ConfigMapsGetter) *ExampleOperator {
 	c := &ExampleOperator{
 		secret:    secret,
 		configMap: configMap,
-
-		queue: workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "ExampleOperator"),
 	}
 
-	c.syncHandler = c.sync
+	secretsInformer := informers.Secrets().Informer()
+	configMapsInformer := informers.ConfigMaps().Informer()
 
-	informers.Secrets().Informer().AddEventHandler(c.eventHandler())
-	informers.ConfigMaps().Informer().AddEventHandler(c.eventHandler())
+	controller, queue := controller.New("ExampleOperator", c.sync, secretsInformer.HasSynced, configMapsInformer.HasSynced)
+
+	c.Controller = controller
+
+	secretsInformer.AddEventHandler(c.eventHandler(queue))
+	configMapsInformer.AddEventHandler(c.eventHandler(queue))
 
 	return c
 }
 
+// eventHandler queues the operator to check spec and status
+// TODO add filtering
+func (c *ExampleOperator) eventHandler(queue workqueue.RateLimitingInterface) cache.ResourceEventHandler {
+	return cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj interface{}) { queue.Add(workQueueKey) },
+		UpdateFunc: func(old, new interface{}) { queue.Add(workQueueKey) },
+		DeleteFunc: func(obj interface{}) { queue.Add(workQueueKey) },
+	}
+}
+
 func (c ExampleOperator) sync() error {
-	config, err := c.configMap.ConfigMaps(targetNamespaceName).Get("instance", metav1.GetOptions{})
+	config, err := c.configMap.ConfigMaps(TargetNamespace).Get("instance", metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -79,7 +83,7 @@ func (c ExampleOperator) sync() error {
 		return nil
 
 	case operatorsv1alpha1.Removed:
-		return c.secret.Secrets(targetNamespaceName).Delete(secretName, nil)
+		return c.secret.Secrets(TargetNamespace).Delete(secretName, nil)
 
 	default:
 		// TODO should update status
@@ -116,7 +120,7 @@ func (c ExampleOperator) sync() error {
 		_, _, err := resourceapply.ApplySecret(c.secret, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      secretName,
-				Namespace: targetNamespaceName,
+				Namespace: TargetNamespace,
 			},
 			Data: map[string][]byte{
 				secretData: []byte("007"),
@@ -137,53 +141,4 @@ func (c ExampleOperator) sync() error {
 	errs = append(errs, err)
 
 	return utilerrors.NewAggregate(errs)
-}
-
-// Run starts the serviceCertSigner and blocks until stopCh is closed.
-func (c *ExampleOperator) Run(workers int, stopCh <-chan struct{}) {
-	defer utilruntime.HandleCrash()
-	defer c.queue.ShutDown()
-
-	glog.Infof("Starting ExampleOperator")
-	defer glog.Infof("Shutting down ExampleOperator")
-
-	for i := 0; i < workers; i++ {
-		go wait.Until(c.runWorker, time.Second, stopCh)
-	}
-
-	<-stopCh
-}
-
-func (c *ExampleOperator) runWorker() {
-	for c.processNextWorkItem() {
-	}
-}
-
-func (c *ExampleOperator) processNextWorkItem() bool {
-	dsKey, quit := c.queue.Get()
-	if quit {
-		return false
-	}
-	defer c.queue.Done(dsKey)
-
-	err := c.syncHandler()
-	if err == nil {
-		c.queue.Forget(dsKey)
-		return true
-	}
-
-	utilruntime.HandleError(fmt.Errorf("%v failed with : %v", dsKey, err))
-	c.queue.AddRateLimited(dsKey)
-
-	return true
-}
-
-// eventHandler queues the operator to check spec and status
-// TODO add filtering
-func (c *ExampleOperator) eventHandler() cache.ResourceEventHandler {
-	return cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { c.queue.Add(workQueueKey) },
-		UpdateFunc: func(old, new interface{}) { c.queue.Add(workQueueKey) },
-		DeleteFunc: func(obj interface{}) { c.queue.Add(workQueueKey) },
-	}
 }
