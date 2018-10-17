@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -17,17 +19,27 @@ func RunOperator(clientConfig *rest.Config, stopCh <-chan struct{}) error {
 		return err
 	}
 
-	kubeInformersNamespaced := informers.NewSharedInformerFactoryWithOptions(kubeClient, 10*time.Minute, informers.WithNamespace(operator.TargetNamespace))
+	kubeInformersNamespaced := informers.NewSharedInformerFactoryWithOptions(kubeClient, 10*time.Minute,
+		informers.WithNamespace(operator.TargetNamespace),
+		informers.WithTweakListOptions(func(options *v1.ListOptions) {
+			options.FieldSelector = fields.OneTermEqualSelector("metadata.name", operator.ResourceName).String()
+		}),
+	)
+
+	coreInformers := kubeInformersNamespaced.Core().V1()
+	secretsInformer := coreInformers.Secrets()
+	configMapsInformer := coreInformers.ConfigMaps()
 
 	exampleOperator := operator.NewExampleOperator(
-		kubeInformersNamespaced.Core().V1(),
+		configMapsInformer,
+		secretsInformer,
 		kubeClient.CoreV1(),
 		kubeClient.CoreV1(),
 	)
 
 	kubeInformersNamespaced.Start(stopCh)
 
-	exampleOperator.Run(1, stopCh) // only start one worker because we only have one key name in our queue
+	exampleOperator.Run(stopCh)
 
 	return fmt.Errorf("stopped")
 }

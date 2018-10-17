@@ -22,24 +22,32 @@ import (
 )
 
 const (
+	// TargetNamespace could be made configurable if desired
 	TargetNamespace = "example-operator"
 
+	// ResourceName could be made configurable if desired
+	// all resources share the same name to make it easier to reason about and to configure single item watches
+	ResourceName = "example-operator-resource"
+
+	// workQueueKey is the singleton key shared by all events
+	// the value is irrelevant
 	workQueueKey = "key"
 )
 
-func NewExampleOperator(coreInformers v1.Interface, secretsClient coreclientv1.SecretsGetter, configMapsClient coreclientv1.ConfigMapsGetter) *ExampleOperator {
+func NewExampleOperator(cmi v1.ConfigMapInformer, si v1.SecretInformer, secretsClient coreclientv1.SecretsGetter, configMapsClient coreclientv1.ConfigMapsGetter) *ExampleOperator {
 	c := &ExampleOperator{
-		secretsClient:    secretsClient,
 		configMapsClient: configMapsClient,
+		secretsClient:    secretsClient,
 	}
 
-	// TODO move this logic up one level
-	secretsInformer := coreInformers.Secrets().Informer()
-	configMapsInformer := coreInformers.ConfigMaps().Informer()
+	secretsInformer := cmi.Informer()
+	configMapsInformer := si.Informer()
 
-	embeddedController, queue := controller.New("ExampleOperator", c.sync, secretsInformer.HasSynced, configMapsInformer.HasSynced)
+	// we do not really need to wait for our informers to sync since we only watch a single resource
+	// and make live reads but it does not hurt anything and guarantees we have the correct behavior
+	internalController, queue := controller.New("ExampleOperator", c.sync, secretsInformer.HasSynced, configMapsInformer.HasSynced)
 
-	c.Controller = embeddedController
+	c.controller = internalController
 
 	secretsInformer.AddEventHandler(eventHandler(queue))
 	configMapsInformer.AddEventHandler(eventHandler(queue))
@@ -49,6 +57,8 @@ func NewExampleOperator(coreInformers v1.Interface, secretsClient coreclientv1.S
 
 // eventHandler queues the operator to check spec and status
 // TODO add filtering and more nuanced logic
+// each informer's event handler could have specific logic based on the resource
+// for now just rekicking the sync loop is enough since we only watch a single resource by name
 func eventHandler(queue workqueue.RateLimitingInterface) cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { queue.Add(workQueueKey) },
@@ -58,22 +68,33 @@ func eventHandler(queue workqueue.RateLimitingInterface) cache.ResourceEventHand
 }
 
 type ExampleOperator struct {
-	secretsClient    coreclientv1.SecretsGetter
+	// for a performance sensitive operator, it would make sense to use informers
+	// to handle reads and clients to handle writes.  since this operator works
+	// on a singleton resource, it has no performance requirements.
 	configMapsClient coreclientv1.ConfigMapsGetter
+	secretsClient    coreclientv1.SecretsGetter
 
-	*controller.Controller
+	controller *controller.Controller
 }
 
-func (c *ExampleOperator) sync() error {
-	config, err := c.configMapsClient.ConfigMaps(TargetNamespace).Get("instance", metav1.GetOptions{})
+func (c *ExampleOperator) Run(stopCh <-chan struct{}) {
+	// only start one worker because we only have one key name in our queue
+	// since this operator works on a singleton, it does not make sense to ever run more than one worker
+	c.controller.Run(1, stopCh)
+}
+
+func (c *ExampleOperator) sync(_ interface{}) error {
+	// we ignore the passed in key because it will always be workQueueKey
+	// it does not matter how the sync loop was triggered
+	// all we need to worry about is reconciling the state back to what we expect
+
+	config, err := c.configMapsClient.ConfigMaps(TargetNamespace).Get(ResourceName, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
 
 	// these are my pretend spec/status fields
 	d := config.Data
-
-	secretName := d["name"]
 
 	state := operatorsv1alpha1.ManagementState(d["state"])
 
@@ -85,7 +106,7 @@ func (c *ExampleOperator) sync() error {
 		return nil
 
 	case operatorsv1alpha1.Removed:
-		return c.secretsClient.Secrets(TargetNamespace).Delete(secretName, nil)
+		return c.secretsClient.Secrets(TargetNamespace).Delete(ResourceName, nil)
 
 	default:
 		// TODO should update status
@@ -121,7 +142,7 @@ func (c *ExampleOperator) sync() error {
 		secretData := d["data"]
 		_, _, err := resourceapply.ApplySecret(c.secretsClient, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
+				Name:      ResourceName,
 				Namespace: TargetNamespace,
 			},
 			Data: map[string][]byte{

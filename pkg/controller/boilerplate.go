@@ -12,21 +12,19 @@ import (
 	"k8s.io/client-go/util/workqueue"
 )
 
-func New(name string, sync SyncFunc, cacheSyncs ...cache.InformerSynced) (*Controller, workqueue.RateLimitingInterface) {
-	queue := workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), name)
-	return &Controller{
+func New(name string, sync cache.ProcessFunc, cacheSyncs ...cache.InformerSynced) (*Controller, workqueue.RateLimitingInterface) {
+	c := &Controller{
 		name:        name,
 		syncHandler: sync,
 		cacheSyncs:  cacheSyncs,
-		queue:       queue,
-	}, queue
+		queue:       workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), name),
+	}
+	return c, c.queue
 }
-
-type SyncFunc func() error
 
 type Controller struct {
 	name        string
-	syncHandler SyncFunc
+	syncHandler cache.ProcessFunc
 	cacheSyncs  []cache.InformerSynced
 	queue       workqueue.RateLimitingInterface
 }
@@ -57,20 +55,20 @@ func (c *Controller) runWorker() {
 }
 
 func (c *Controller) processNextWorkItem() bool {
-	dsKey, quit := c.queue.Get()
+	key, quit := c.queue.Get()
 	if quit {
 		return false
 	}
-	defer c.queue.Done(dsKey)
+	defer c.queue.Done(key)
 
-	err := c.syncHandler()
+	err := c.syncHandler(key)
 	if err == nil {
-		c.queue.Forget(dsKey)
+		c.queue.Forget(key)
 		return true
 	}
 
-	utilruntime.HandleError(fmt.Errorf("%v failed with : %v", dsKey, err))
-	c.queue.AddRateLimited(dsKey)
+	utilruntime.HandleError(fmt.Errorf("%v failed with: %v", key, err))
+	c.queue.AddRateLimited(key)
 
 	return true
 }
