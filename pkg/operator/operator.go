@@ -6,6 +6,7 @@ import (
 	"github.com/blang/semver"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -106,7 +107,7 @@ func (c *ExampleOperator) sync(_ interface{}) error {
 		return nil
 
 	case operatorsv1alpha1.Removed:
-		return c.secretsClient.Secrets(TargetNamespace).Delete(ResourceName, nil)
+		return utilerrors.FilterOut(c.secretsClient.Secrets(TargetNamespace).Delete(ResourceName, nil), errors.IsNotFound)
 
 	default:
 		// TODO should update status
