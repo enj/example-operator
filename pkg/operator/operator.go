@@ -20,6 +20,8 @@ import (
 	"github.com/openshift/library-go/pkg/operator/versioning"
 
 	"github.com/enj/example-operator/pkg/controller"
+	"github.com/enj/example-operator/pkg/generated/clientset/versioned/typed/example/v1alpha1"
+	exampleinformers "github.com/enj/example-operator/pkg/generated/informers/externalversions/example/v1alpha1"
 )
 
 const (
@@ -35,23 +37,23 @@ const (
 	workQueueKey = "key"
 )
 
-func NewExampleOperator(cmi v1.ConfigMapInformer, si v1.SecretInformer, secretsClient coreclientv1.SecretsGetter, configMapsClient coreclientv1.ConfigMapsGetter) *ExampleOperator {
+func NewExampleOperator(eoi exampleinformers.ExampleOperatorInformer, si v1.SecretInformer, operatorClient v1alpha1.ExampleOperatorInterface, secretsClient coreclientv1.SecretsGetter) *ExampleOperator {
 	c := &ExampleOperator{
-		configMapsClient: configMapsClient,
-		secretsClient:    secretsClient,
+		operatorClient: operatorClient,
+		secretsClient:  secretsClient,
 	}
 
-	secretsInformer := cmi.Informer()
-	configMapsInformer := si.Informer()
+	operatorInformer := eoi.Informer()
+	secretsInformer := si.Informer()
 
 	// we do not really need to wait for our informers to sync since we only watch a single resource
 	// and make live reads but it does not hurt anything and guarantees we have the correct behavior
-	internalController, queue := controller.New("ExampleOperator", c.sync, secretsInformer.HasSynced, configMapsInformer.HasSynced)
+	internalController, queue := controller.New("ExampleOperator", c.sync, operatorInformer.HasSynced, secretsInformer.HasSynced)
 
 	c.controller = internalController
 
+	operatorInformer.AddEventHandler(eventHandler(queue))
 	secretsInformer.AddEventHandler(eventHandler(queue))
-	configMapsInformer.AddEventHandler(eventHandler(queue))
 
 	return c
 }
@@ -72,8 +74,8 @@ type ExampleOperator struct {
 	// for a performance sensitive operator, it would make sense to use informers
 	// to handle reads and clients to handle writes.  since this operator works
 	// on a singleton resource, it has no performance requirements.
-	configMapsClient coreclientv1.ConfigMapsGetter
-	secretsClient    coreclientv1.SecretsGetter
+	operatorClient v1alpha1.ExampleOperatorInterface
+	secretsClient  coreclientv1.SecretsGetter
 
 	controller *controller.Controller
 }
@@ -89,17 +91,12 @@ func (c *ExampleOperator) sync(_ interface{}) error {
 	// it does not matter how the sync loop was triggered
 	// all we need to worry about is reconciling the state back to what we expect
 
-	config, err := c.configMapsClient.ConfigMaps(TargetNamespace).Get(ResourceName, metav1.GetOptions{})
+	config, err := c.operatorClient.Get(ResourceName, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
 
-	// these are my pretend spec/status fields
-	d := config.Data
-
-	state := operatorsv1alpha1.ManagementState(d["state"])
-
-	switch state {
+	switch config.Spec.ManagementState {
 	case operatorsv1alpha1.Managed:
 		// handled below
 
@@ -111,23 +108,20 @@ func (c *ExampleOperator) sync(_ interface{}) error {
 
 	default:
 		// TODO should update status
-		return fmt.Errorf("unknown state: %v", state)
+		return fmt.Errorf("unknown state: %v", config.Spec.ManagementState)
 	}
-
-	startVersion := d["current_version"]
-	endVersion := d["desired_version"]
 
 	var currentActualVerion *semver.Version
 
-	if len(startVersion) != 0 {
-		ver, err := semver.Parse(startVersion)
+	if ca := config.Status.CurrentAvailability; ca != nil {
+		ver, err := semver.Parse(ca.Version)
 		if err != nil {
 			utilruntime.HandleError(err)
 		} else {
 			currentActualVerion = &ver
 		}
 	}
-	desiredVersion, err := semver.Parse(endVersion)
+	desiredVersion, err := semver.Parse(config.Spec.Version)
 	if err != nil {
 		// TODO report failing status, we may actually attempt to do this in the "normal" error handling
 		return err
@@ -140,28 +134,29 @@ func (c *ExampleOperator) sync(_ interface{}) error {
 
 	switch {
 	case v310_00_to_unknown.BetweenOrEmpty(currentActualVerion) && v310_00_to_unknown.Between(&desiredVersion):
-		secretData := d["data"]
 		_, _, err := resourceapply.ApplySecret(c.secretsClient, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      ResourceName,
 				Namespace: TargetNamespace,
 			},
 			Data: map[string][]byte{
-				secretData: []byte("007"),
+				config.Spec.Value: []byte("007"),
 			},
 		})
 		errs = append(errs, err)
 
-		if err == nil { // this needs work
-			outConfig.Data["summary"] = "sync-[3.10.0,3.10.1)"
-			outConfig.Data["current_version"] = desiredVersion.String()
+		if err == nil { // this needs work, but good enough for now
+			outConfig.Status.TaskSummary = "sync-[3.10.0,3.10.1)"
+			outConfig.Status.CurrentAvailability = &operatorsv1alpha1.VersionAvailability{
+				Version: desiredVersion.String(),
+			}
 		}
 
 	default:
-		outConfig.Data["summary"] = "unrecognized"
+		outConfig.Status.TaskSummary = "unrecognized"
 	}
 
-	_, _, err = resourceapply.ApplyConfigMap(c.configMapsClient, outConfig)
+	_, _, err = resourceapply.ApplyConfigMap(c.operatorClient, outConfig)
 	errs = append(errs, err)
 
 	return utilerrors.NewAggregate(errs)

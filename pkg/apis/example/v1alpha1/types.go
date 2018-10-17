@@ -19,6 +19,8 @@ type ExampleOperator struct {
 
 type ExampleOperatorSpec struct {
 	v1alpha1.OperatorSpec
+
+	Value string
 }
 
 type ExampleOperatorStatus struct {
