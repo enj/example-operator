@@ -156,7 +156,8 @@ func (c *ExampleOperator) sync(_ interface{}) error {
 		outConfig.Status.TaskSummary = "unrecognized"
 	}
 
-	_, _, err = resourceapply.ApplyConfigMap(c.operatorClient, outConfig)
+	// TODO: this should do better apply logic or similar, maybe use SetStatusFromAvailability
+	_, err = c.operatorClient.Update(outConfig)
 	errs = append(errs, err)
 
 	return utilerrors.NewAggregate(errs)
