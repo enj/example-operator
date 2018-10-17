@@ -122,3 +122,11 @@ build-rpms:
 build-images:
 	hack/build-images.sh
 .PHONY: build-images
+
+# Update vendored dependencies
+#
+# Example:
+#	make update-deps
+update-deps:
+	hack/update-deps.sh
+.PHONY: update-deps
