@@ -1,5 +1,5 @@
-hash: ff7ff1341a61595d979407f79fc64b0bf4d10ad265e419ae4379ea34fa6eb3bb
-updated: 2018-10-17T10:59:27.738317881-04:00
+hash: 812c390f0c0afe29dcc7dea0c3dd54cefed5493dbfa92e72e1ab75ba866ff10c
+updated: 2018-10-17T11:15:37.075085273-04:00
 imports:
 - name: github.com/beorn7/perks
   version: 3ac7bf7a47d159a033b107610db8a1b6575507a4
@@ -206,6 +206,10 @@ imports:
   version: f51c12702a4d776e4c1fa9b0fabab841babae631
   subpackages:
   - rate
+- name: golang.org/x/tools
+  version: 2382e3994d48b1d22acc2c86bcad0a2aff028e32
+  subpackages:
+  - imports
 - name: gopkg.in/inf.v0
   version: 3887ee99ecf07df5b447e9b00d9c0b2adaa9f3e4
 - name: gopkg.in/yaml.v2
@@ -426,6 +430,10 @@ imports:
   - util/workqueue
 - name: k8s.io/code-generator
   version: 6702109cc68eb6fe6350b83e14407c8d7309fd1a
+- name: k8s.io/gengo
+  version: 01a732e01d00cb9a81bb0ca050d3e6d2b947927b
+  subpackages:
+  - args
 - name: k8s.io/kube-aggregator
   version: 89cd614e9090a2f1e78316ed459857c49c55d276
   subpackages:

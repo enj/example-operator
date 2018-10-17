@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	GroupName     = "example-operator.crd.monis.app"
+	GroupName     = "exampleoperator.crd.monis.app"
 	GroupVersion  = schema.GroupVersion{Group: GroupName, Version: "v1alpha1"}
 	schemeBuilder = runtime.NewSchemeBuilder(addKnownTypes, configv1.Install, operatorsv1alpha1api.Install)
 	// Install is a function which adds this version to a scheme

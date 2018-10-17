@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	GroupName = "example-operator.crd.monis.app"
+	GroupName = "exampleoperator.crd.monis.app"
 )
 
 var (
