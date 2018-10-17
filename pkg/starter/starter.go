@@ -26,18 +26,21 @@ func RunOperator(clientConfig *rest.Config, stopCh <-chan struct{}) error {
 		return err
 	}
 
-	kubeInformersNamespaced := informers.NewSharedInformerFactoryWithOptions(kubeClient, 10*time.Minute,
+	const resync = 10 * time.Minute
+
+	// only watch a specific resource name
+	tweakListOptions := func(options *v1.ListOptions) {
+		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", operator.ResourceName).String()
+	}
+
+	kubeInformersNamespaced := informers.NewSharedInformerFactoryWithOptions(kubeClient, resync,
 		informers.WithNamespace(operator.TargetNamespace),
-		informers.WithTweakListOptions(func(options *v1.ListOptions) {
-			options.FieldSelector = fields.OneTermEqualSelector("metadata.name", operator.ResourceName).String()
-		}),
+		informers.WithTweakListOptions(tweakListOptions),
 	)
 
-	exampleOperatorInformers := externalversions.NewSharedInformerFactoryWithOptions(exampleOperatorClient, 10*time.Minute,
+	exampleOperatorInformers := externalversions.NewSharedInformerFactoryWithOptions(exampleOperatorClient, resync,
 		externalversions.WithNamespace(operator.TargetNamespace),
-		externalversions.WithTweakListOptions(func(options *v1.ListOptions) {
-			options.FieldSelector = fields.OneTermEqualSelector("metadata.name", operator.ResourceName).String()
-		}),
+		externalversions.WithTweakListOptions(tweakListOptions),
 	)
 
 	exampleOperator := operator.NewExampleOperator(
