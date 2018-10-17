@@ -58,6 +58,7 @@ verify:
 	hack/verify-gofmt.sh ||r=1;\
 	hack/verify-govet.sh ||r=1;\
 	hack/verify-imports.sh ||r=1;\
+	hack/verify-codegen.sh ||r=1;\
 	exit $$r ;\
 	}
 .PHONY: verify
@@ -130,3 +131,13 @@ build-images:
 update-deps:
 	hack/update-deps.sh
 .PHONY: update-deps
+
+# Update generated code
+#
+# Args:
+#
+# Example:
+#   make update-codegen
+update-codegen:
+	hack/update-codegen.sh
+.PHONY: update-codegen

@@ -1,5 +1,5 @@
-hash: 33f1550fa682b86d99c4b27d9c44759a4f0b9325edb8520c16daae5c6173a20a
-updated: 2018-10-17T09:49:41.786201085-04:00
+hash: ff7ff1341a61595d979407f79fc64b0bf4d10ad265e419ae4379ea34fa6eb3bb
+updated: 2018-10-17T10:59:27.738317881-04:00
 imports:
 - name: github.com/beorn7/perks
   version: 3ac7bf7a47d159a033b107610db8a1b6575507a4
@@ -424,6 +424,8 @@ imports:
   - util/integer
   - util/retry
   - util/workqueue
+- name: k8s.io/code-generator
+  version: 6702109cc68eb6fe6350b83e14407c8d7309fd1a
 - name: k8s.io/kube-aggregator
   version: 89cd614e9090a2f1e78316ed459857c49c55d276
   subpackages:
