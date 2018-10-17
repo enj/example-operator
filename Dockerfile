@@ -1,11 +1,10 @@
+# This is an example operator.
 #
-# This is the integrated OpenShift Service Serving Cert Signer.  It signs serving certificates for use inside the platform.
-#
-# The standard name for this image is openshift/origin-service-ca
+# The standard name for its image is enj/example-operator
 #
 FROM openshift/origin-release:golang-1.10
 COPY . /go/src/github.com/enj/example-operator
-RUN cd /go/src/github.com/enj/example-operator && go build ./cmd/service-ca
+RUN cd /go/src/github.com/enj/example-operator && go build ./cmd/example
 
 FROM centos:7
-COPY --from=0 /go/src/github.com/enj/example-operator/service-ca /usr/bin/service-ca
+COPY --from=0 /go/src/github.com/enj/example-operator/example /usr/bin/example
