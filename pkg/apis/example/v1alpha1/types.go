@@ -13,14 +13,14 @@ type ExampleOperator struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ExampleOperatorSpec   `json:"status,omitempty"`
+	Spec   ExampleOperatorSpec   `json:"spec,omitempty"`
 	Status ExampleOperatorStatus `json:"status,omitempty"`
 }
 
 type ExampleOperatorSpec struct {
 	v1alpha1.OperatorSpec
 
-	Value string
+	Value string `json:"value,omitempty"`
 }
 
 type ExampleOperatorStatus struct {
