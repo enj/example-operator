@@ -10,9 +10,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/enj/example-operator/pkg/example/operator"
 	"github.com/enj/example-operator/pkg/generated/clientset/versioned"
 	"github.com/enj/example-operator/pkg/generated/informers/externalversions"
-	"github.com/enj/example-operator/pkg/operator"
 )
 
 func RunOperator(clientConfig *rest.Config, stopCh <-chan struct{}) error {

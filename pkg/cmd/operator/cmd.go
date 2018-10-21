@@ -5,8 +5,8 @@ import (
 
 	"github.com/openshift/library-go/pkg/controller/controllercmd"
 
-	"github.com/enj/example-operator/pkg/starter"
-	"github.com/enj/example-operator/pkg/version"
+	"github.com/enj/example-operator/pkg/example/starter"
+	"github.com/enj/example-operator/pkg/example/version"
 )
 
 func NewOperator() *cobra.Command {
