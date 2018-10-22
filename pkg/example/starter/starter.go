@@ -53,7 +53,9 @@ func RunOperator(clientConfig *rest.Config, stopCh <-chan struct{}) error {
 	kubeInformersNamespaced.Start(stopCh)
 	exampleOperatorInformers.Start(stopCh)
 
-	exampleOperator.Run(stopCh)
+	go exampleOperator.Run(stopCh)
+
+	<-stopCh
 
 	return fmt.Errorf("stopped")
 }
